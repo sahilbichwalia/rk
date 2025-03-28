@@ -1,199 +1,130 @@
-import streamlit as st
-import pandas as pd
-import plotly.express as px
 import psutil
 import platform
-import socket
 import os
-import getpass
+import time
+import socket
 import datetime
-import uuid
-from typing import Dict, Any
+import sys
+from typing import Dict
 
-# Constants
-GRID_EMISSION_FACTOR = 400  # gCO2/kWh (US average)
-WATER_USAGE_IMPACT = 0.001
-
-# Environment Detection
-def detect_environment() -> Dict[str, Any]:
-    """Detect if running in Streamlit Cloud or local/server"""
-    env_info = {
-        "is_streamlit_cloud": "STREAMLIT_SERVER_ADDRESS" in os.environ,
-        "is_cloud": True if "STREAMLIT_SERVER_ADDRESS" in os.environ else None,
-        "platform": platform.system(),
-        "containerized": os.path.exists("/.dockerenv"),
-        "cloud_provider": None
-    }
-
-    # Detect cloud providers
-    try:
-        if os.path.exists("/proc/1/cgroup") and any("docker" in line for line in open("/proc/1/cgroup")):
-            env_info["containerized"] = True
-            if os.path.exists("/etc/aws-hostname"):
-                env_info["cloud_provider"] = "AWS"
-            elif os.path.exists("/etc/gce-hostname"):
-                env_info["cloud_provider"] = "GCP"
-            elif "AZURE" in socket.gethostname():
-                env_info["cloud_provider"] = "Azure"
-    except:
-        pass
-
-    return env_info
-
-# Page configuration
-st.set_page_config(
-    page_title="System Monitoring Dashboard",
-    page_icon="🖥️",
-    layout="wide"
-)
-
-# Custom CSS
-st.markdown("""
-<style>
-    .metric-card {
-        background-color: #0e1117;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
-    }
-    .gpu-card {
-        background-color: #1a1d24;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
-    }
-    .cloud-banner {
-        background-color: #2a3f5f;
-        color: white;
-        padding: 10px;
-        border-radius: 5px;
-        margin-bottom: 20px;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-def get_system_info() -> Dict[str, Any]:
-    """Get system information with cloud awareness"""
-    env = detect_environment()
-    info = {
-        "Environment": "Streamlit Cloud" if env["is_streamlit_cloud"] else 
-                     f"{env['cloud_provider']} Cloud" if env["cloud_provider"] else "Local Server",
-        "OS": platform.system(),
-        "OS Version": platform.version(),
-        "Platform": platform.platform(),
-        "Containerized": env["containerized"],
-        "Hostname": socket.gethostname(),
-        "CPU Cores (Physical/Logical)": f"{psutil.cpu_count(logical=False)}/{psutil.cpu_count(logical=True)}",
-        "RAM Size (GB)": round(psutil.virtual_memory().total / (1024 ** 3), 2),
-    }
+class SystemMonitor:
+    """Real-time system and power monitoring tool"""
     
-    # Only include sensitive info if not in cloud
-    if not env["is_streamlit_cloud"]:
-        info.update({
-            "User Name": getpass.getuser(),
-            "MAC Address": ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) 
-                          for elements in range(0, 2*6, 8)][::-1])
-        })
-    return info
+    # Environmental constants
+    GRID_EMISSION_FACTOR = 400  # gCO2/kWh
+    BASE_PUE = 1.5  # Default PUE for standard servers
 
-def get_cloud_metrics() -> Dict[str, Any]:
-    """Get metrics that work well in cloud environments"""
-    return {
-        "CPU Usage (%)": psutil.cpu_percent(interval=1),
-        "Memory Usage (%)": psutil.virtual_memory().percent,
-        "Disk Usage (%)": psutil.disk_usage("/").percent,
-        "Network IO (MB)": {
-            "Sent": round(psutil.net_io_counters().bytes_sent / (1024 ** 2), 2),
-            "Received": round(psutil.net_io_counters().bytes_recv / (1024 ** 2), 2)
+    @staticmethod
+    def _enable_unicode_console():
+        """Configure console for Unicode support on Windows"""
+        if sys.platform == 'win32':
+            try:
+                # Try to configure console for UTF-8
+                sys.stdout.reconfigure(encoding='utf-8')
+            except:
+                # Fallback for older Python versions
+                import io
+                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+
+    @staticmethod
+    def get_all_metrics() -> Dict:
+        """Collect all system metrics in one call"""
+        cpu_freq = psutil.cpu_freq()
+        mem = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        disk_io = psutil.disk_io_counters()
+        net_io = psutil.net_io_counters()
+        
+        return {
+            "system": {
+                "os": platform.system(),
+                "hostname": socket.gethostname(),
+                "uptime": str(datetime.datetime.now() - datetime.datetime.fromtimestamp(psutil.boot_time())),
+                "cores": f"{psutil.cpu_count(logical=False)}/{psutil.cpu_count(logical=True)}"
+            },
+            "cpu": {
+                "usage": psutil.cpu_percent(interval=1),
+                "freq": cpu_freq.current if cpu_freq else None,
+                "per_core": psutil.cpu_percent(interval=1, percpu=True)
+            },
+            "memory": {
+                "total": mem.total / (1024**3),
+                "used": mem.used / (1024**3),
+                "percent": mem.percent
+            },
+            "disk": {
+                "total": disk.total / (1024**3),
+                "used": disk.used / (1024**3),
+                "io": (disk_io.read_bytes + disk_io.write_bytes) / (1024**2)
+            },
+            "network": {
+                "sent": net_io.bytes_sent / (1024**2),
+                "recv": net_io.bytes_recv / (1024**2)
+            }
         }
-    }
 
-def create_gauge(value: float, title: str, color: str):
-    """Create a gauge chart"""
-    fig = px.pie(
-        values=[value, 100-value],
-        names=['Used', 'Free'],
-        hole=0.7,
-        title=f"{title}: {value}%"
-    )
-    fig.update_traces(
-        textinfo='none',
-        marker=dict(colors=[color, '#d3d3d3'])
-    )
-    fig.update_layout(
-        showlegend=False,
-        margin=dict(t=50, b=10, l=10, r=10),
-        height=200
-    )
-    return fig
+    @staticmethod
+    def calculate_power(metrics: Dict) -> Dict:
+        """Calculate power usage from metrics"""
+        cpu_power = (metrics["cpu"]["usage"]/100) * (metrics["cpu"]["freq"]/1000 if metrics["cpu"]["freq"] else 2.5) * 15
+        mem_power = (metrics["memory"]["used"] * 0.5) * (metrics["memory"]["percent"]/100 + 0.1)
+        disk_power = 2 if metrics["disk"]["io"] > 0 else 0.5
+        
+        total_it_power = cpu_power + mem_power + disk_power
+        total_power = total_it_power * SystemMonitor.BASE_PUE
+        
+        return {
+            "components": {
+                "cpu": round(cpu_power, 1),
+                "memory": round(mem_power, 1),
+                "disk": round(disk_power, 1)
+            },
+            "total_it": round(total_it_power, 1),
+            "total_facility": round(total_power, 1),
+            "pue": SystemMonitor.BASE_PUE
+        }
 
-def main():
-    env = detect_environment()
-    
-    # Environment banner
-    if env["is_streamlit_cloud"]:
-        st.markdown("""
-        <div class="cloud-banner">
-            <h3>🛠️ Running in Streamlit Cloud Environment</h3>
-            <p>Some hardware metrics may be limited due to cloud virtualization</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.title("🖥️ Cloud/Server Monitoring Dashboard")
-    
-    # Get data
-    system_info = get_system_info()
-    metrics = get_cloud_metrics()
-    
-    # Layout
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("### Environment Info")
-        env_df = pd.DataFrame({
-            "Property": list(system_info.keys()),
-            "Value": list(system_info.values())
-        })
-        st.dataframe(env_df, hide_index=True, use_container_width=True)
+    @staticmethod
+    def calculate_emissions(power_w: float) -> Dict:
+        """Calculate environmental impact"""
+        hourly_co2 = (power_w/1000) * SystemMonitor.GRID_EMISSION_FACTOR
+        return {
+            "hourly": round(hourly_co2, 1),
+            "daily": round(hourly_co2 * 24 / 1000, 2),
+            "annual": round(hourly_co2 * 24 * 365 / 1000000, 3)
+        }
+
+    @staticmethod
+    def display_dashboard(interval: int = 5):
+        """Display real-time monitoring dashboard"""
+        SystemMonitor._enable_unicode_console()
         
-    with col2:
-        st.markdown("### CPU Usage")
-        st.plotly_chart(
-            create_gauge(metrics["CPU Usage (%)"], "CPU", "#1f77b4"),
-            use_container_width=True
-        )
-        
-        st.markdown("### Memory Usage")
-        st.plotly_chart(
-            create_gauge(metrics["Memory Usage (%)"], "Memory", "#ff7f0e"),
-            use_container_width=True
-        )
-        
-    with col3:
-        st.markdown("### Disk Usage")
-        st.plotly_chart(
-            create_gauge(metrics["Disk Usage (%)"], "Disk", "#2ca02c"),
-            use_container_width=True
-        )
-        
-        st.markdown("### Network Activity")
-        net_df = pd.DataFrame({
-            "Direction": ["Sent", "Received"],
-            "MB": [
-                metrics["Network IO (MB)"]["Sent"],
-                metrics["Network IO (MB)"]["Received"]
-            ]
-        })
-        st.bar_chart(net_df.set_index("Direction"))
-    
-    # Cloud-specific notes
-    if env["is_streamlit_cloud"]:
-        st.info("""
-        **Note about Streamlit Cloud:**
-        - Hardware-specific metrics (GPU, exact CPU details) are not available
-        - Disk and memory measurements show container limits, not physical hardware
-        - Network metrics are container-local
-        """)
+        try:
+            while True:
+                os.system('cls' if os.name == 'nt' else 'clear')
+                metrics = SystemMonitor.get_all_metrics()
+                power = SystemMonitor.calculate_power(metrics)
+                emissions = SystemMonitor.calculate_emissions(power["total_facility"])
+                
+                # Use ASCII-only characters for compatibility
+                print("=== REAL-TIME SYSTEM MONITOR ===")
+                print(f"Host: {metrics['system']['hostname']} | Uptime: {metrics['system']['uptime']}")
+                print(f"CPU: {metrics['cpu']['usage']}% | Memory: {metrics['memory']['percent']}% | "
+                      f"Disk: {metrics['disk']['used']:.1f}/{metrics['disk']['total']:.1f}GB")
+                
+                print("\n[POWER USAGE]")
+                print(f"CPU: {power['components']['cpu']}W | RAM: {power['components']['memory']}W | "
+                      f"Disk: {power['components']['disk']}W")
+                print(f"Total IT: {power['total_it']}W | Facility: {power['total_facility']}W (PUE: {power['pue']})")
+                
+                print("\n[ENVIRONMENTAL IMPACT]")
+                print(f"CO2: {emissions['hourly']}g/h | {emissions['daily']}kg/day | "
+                      f"{emissions['annual']}t/year")
+                
+                time.sleep(interval)
+                
+        except KeyboardInterrupt:
+            print("\nMonitoring stopped.")
 
 if __name__ == "__main__":
-    main()
+    SystemMonitor.display_dashboard()
