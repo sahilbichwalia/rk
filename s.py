@@ -13,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS for better styling
+# Custom CSS
 st.markdown("""
 <style>
     .metric-card {
@@ -31,7 +31,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Main dashboard layout
+def create_gauge(value, title, color):
+    """Helper function to create gauge charts"""
+    fig = px.pie(
+        values=[value, 100-value],
+        names=['Used', 'Free'],
+        hole=0.7,
+        title=title
+    )
+    fig.update_traces(
+        textinfo='none',
+        marker=dict(colors=[color, '#d3d3d3'])
+    )
+    fig.update_layout(
+        showlegend=False,
+        margin=dict(t=50, b=10, l=10, r=10),
+        height=200
+    )
+    return fig
+
 def main():
     st.title("🖥️ Real-time System Monitoring Dashboard")
     
@@ -66,36 +84,20 @@ def main():
         st.markdown("### CPU & Memory")
         # CPU Gauge
         st.plotly_chart(
-            px.pie(
-                values=[cpu_usage['CPU Usage (%)'], 
-                names=["CPU Usage"],
-                hole=0.7,
-                title=f"CPU Usage: {cpu_usage['CPU Usage (%)']}%"
-            ).update_traces(
-                textinfo='none',
-                marker=dict(colors=['#1f77b4', '#d3d3d3'])
-            ).update_layout(
-                showlegend=False,
-                margin=dict(t=50, b=10, l=10, r=10),
-                height=200
+            create_gauge(
+                cpu_usage['CPU Usage (%)'],
+                f"CPU Usage: {cpu_usage['CPU Usage (%)']}%",
+                '#1f77b4'
             ),
             use_container_width=True
         )
         
         # Memory Gauge
         st.plotly_chart(
-            px.pie(
-                values=[memory_usage['Memory Usage (%)'], 
-                names=["Memory Usage"],
-                hole=0.7,
-                title=f"Memory Usage: {memory_usage['Memory Usage (%)']}%"
-            ).update_traces(
-                textinfo='none',
-                marker=dict(colors=['#ff7f0e', '#d3d3d3'])
-            ).update_layout(
-                showlegend=False,
-                margin=dict(t=50, b=10, l=10, r=10),
-                height=200
+            create_gauge(
+                memory_usage['Memory Usage (%)'],
+                f"Memory Usage: {memory_usage['Memory Usage (%)']}%",
+                '#ff7f0e'
             ),
             use_container_width=True
         )
@@ -104,18 +106,10 @@ def main():
         st.markdown("### Disk & Network")
         # Disk Usage
         st.plotly_chart(
-            px.pie(
-                values=[disk_usage['Disk Usage (%)'], 
-                names=["Disk Usage"],
-                hole=0.7,
-                title=f"Disk Usage: {disk_usage['Disk Usage (%)']}%"
-            ).update_traces(
-                textinfo='none',
-                marker=dict(colors=['#2ca02c', '#d3d3d3'])
-            ).update_layout(
-                showlegend=False,
-                margin=dict(t=50, b=10, l=10, r=10),
-                height=200
+            create_gauge(
+                disk_usage['Disk Usage (%)'],
+                f"Disk Usage: {disk_usage['Disk Usage (%)']}%",
+                '#2ca02c'
             ),
             use_container_width=True
         )
@@ -129,8 +123,8 @@ def main():
         </div>
         """, unsafe_allow_html=True)
     
-    # GPU Information (if available)
-    if "No GPU Detected" not in gpu_info.values():
+    # GPU Information
+    if "No GPU Detected" not in str(gpu_info):
         st.markdown("### GPU Information")
         gpu_cols = st.columns(len(gpu_info))
         
@@ -179,9 +173,5 @@ def main():
         with tab3:
             st.dataframe(pd.DataFrame([energy_metrics]))
 
-# Run the app
 if __name__ == "__main__":
-    # Auto-refresh every 5 seconds
-    st.runtime.scriptrunner.add_script_run_ctx(st.script_run_ctx)
     main()
-    st.experimental_rerun()
