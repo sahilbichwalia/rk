@@ -1,130 +1,144 @@
+import streamlit as st
 import psutil
 import platform
-import os
 import time
-import socket
-import datetime
-import sys
-from typing import Dict
+import pandas as pd
+import plotly.express as px
+from datetime import datetime
 
-class SystemMonitor:
-    """Real-time system and power monitoring tool"""
+# Constants
+GRID_EMISSION_FACTOR = 500  # gCO2/kWh (global average)
+PUE_CLOUD = 1.2  # Power Usage Effectiveness for cloud data centers
+
+st.set_page_config(layout="wide")
+
+class DataCenterMonitor:
+    """Data Center Energy Monitoring System"""
     
-    # Environmental constants
-    GRID_EMISSION_FACTOR = 400  # gCO2/kWh
-    BASE_PUE = 1.5  # Default PUE for standard servers
-
     @staticmethod
-    def _enable_unicode_console():
-        """Configure console for Unicode support on Windows"""
-        if sys.platform == 'win32':
-            try:
-                # Try to configure console for UTF-8
-                sys.stdout.reconfigure(encoding='utf-8')
-            except:
-                # Fallback for older Python versions
-                import io
-                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-
-    @staticmethod
-    def get_all_metrics() -> Dict:
-        """Collect all system metrics in one call"""
-        cpu_freq = psutil.cpu_freq()
+    def get_live_metrics():
+        """Collect real-time server metrics"""
+        cpu_percent = psutil.cpu_percent(interval=1)
         mem = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
-        disk_io = psutil.disk_io_counters()
-        net_io = psutil.net_io_counters()
         
         return {
-            "system": {
-                "os": platform.system(),
-                "hostname": socket.gethostname(),
-                "uptime": str(datetime.datetime.now() - datetime.datetime.fromtimestamp(psutil.boot_time())),
-                "cores": f"{psutil.cpu_count(logical=False)}/{psutil.cpu_count(logical=True)}"
-            },
-            "cpu": {
-                "usage": psutil.cpu_percent(interval=1),
-                "freq": cpu_freq.current if cpu_freq else None,
-                "per_core": psutil.cpu_percent(interval=1, percpu=True)
-            },
-            "memory": {
-                "total": mem.total / (1024**3),
-                "used": mem.used / (1024**3),
-                "percent": mem.percent
-            },
-            "disk": {
-                "total": disk.total / (1024**3),
-                "used": disk.used / (1024**3),
-                "io": (disk_io.read_bytes + disk_io.write_bytes) / (1024**2)
-            },
-            "network": {
-                "sent": net_io.bytes_sent / (1024**2),
-                "recv": net_io.bytes_recv / (1024**2)
-            }
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "cpu_usage": cpu_percent,
+            "memory_used": mem.used / (1024 ** 3),
+            "memory_total": mem.total / (1024 ** 3),
+            "disk_used": disk.used / (1024 ** 3),
+            "disk_total": disk.total / (1024 ** 3)
         }
 
     @staticmethod
-    def calculate_power(metrics: Dict) -> Dict:
-        """Calculate power usage from metrics"""
-        cpu_power = (metrics["cpu"]["usage"]/100) * (metrics["cpu"]["freq"]/1000 if metrics["cpu"]["freq"] else 2.5) * 15
-        mem_power = (metrics["memory"]["used"] * 0.5) * (metrics["memory"]["percent"]/100 + 0.1)
-        disk_power = 2 if metrics["disk"]["io"] > 0 else 0.5
+    def estimate_power(metrics):
+        """Estimate power consumption"""
+        # Dynamic power model for cloud servers
+        cpu_power = metrics["cpu_usage"]/100 * 150  # 150W max TDP assumed
+        mem_power = metrics["memory_used"] * 0.3    # 0.3W per GB
+        disk_power = 10 if metrics["disk_used"] > 0 else 5
         
-        total_it_power = cpu_power + mem_power + disk_power
-        total_power = total_it_power * SystemMonitor.BASE_PUE
+        it_power = cpu_power + mem_power + disk_power
+        total_power = it_power * PUE_CLOUD
         
         return {
-            "components": {
-                "cpu": round(cpu_power, 1),
-                "memory": round(mem_power, 1),
-                "disk": round(disk_power, 1)
-            },
-            "total_it": round(total_it_power, 1),
-            "total_facility": round(total_power, 1),
-            "pue": SystemMonitor.BASE_PUE
+            "cpu_power": cpu_power,
+            "mem_power": mem_power,
+            "disk_power": disk_power,
+            "it_power": it_power,
+            "total_power": total_power,
+            "cooling_overhead": total_power - it_power
         }
 
     @staticmethod
-    def calculate_emissions(power_w: float) -> Dict:
-        """Calculate environmental impact"""
-        hourly_co2 = (power_w/1000) * SystemMonitor.GRID_EMISSION_FACTOR
+    def calculate_emissions(power_w):
+        """Calculate carbon footprint"""
+        hourly_co2 = (power_w / 1000) * GRID_EMISSION_FACTOR
         return {
-            "hourly": round(hourly_co2, 1),
-            "daily": round(hourly_co2 * 24 / 1000, 2),
-            "annual": round(hourly_co2 * 24 * 365 / 1000000, 3)
+            "hourly": hourly_co2,
+            "daily": hourly_co2 * 24,
+            "annual": hourly_co2 * 24 * 365
         }
 
-    @staticmethod
-    def display_dashboard(interval: int = 5):
-        """Display real-time monitoring dashboard"""
-        SystemMonitor._enable_unicode_console()
-        
-        try:
-            while True:
-                os.system('cls' if os.name == 'nt' else 'clear')
-                metrics = SystemMonitor.get_all_metrics()
-                power = SystemMonitor.calculate_power(metrics)
-                emissions = SystemMonitor.calculate_emissions(power["total_facility"])
-                
-                # Use ASCII-only characters for compatibility
-                print("=== REAL-TIME SYSTEM MONITOR ===")
-                print(f"Host: {metrics['system']['hostname']} | Uptime: {metrics['system']['uptime']}")
-                print(f"CPU: {metrics['cpu']['usage']}% | Memory: {metrics['memory']['percent']}% | "
-                      f"Disk: {metrics['disk']['used']:.1f}/{metrics['disk']['total']:.1f}GB")
-                
-                print("\n[POWER USAGE]")
-                print(f"CPU: {power['components']['cpu']}W | RAM: {power['components']['memory']}W | "
-                      f"Disk: {power['components']['disk']}W")
-                print(f"Total IT: {power['total_it']}W | Facility: {power['total_facility']}W (PUE: {power['pue']})")
-                
-                print("\n[ENVIRONMENTAL IMPACT]")
-                print(f"CO2: {emissions['hourly']}g/h | {emissions['daily']}kg/day | "
-                      f"{emissions['annual']}t/year")
-                
-                time.sleep(interval)
-                
-        except KeyboardInterrupt:
-            print("\nMonitoring stopped.")
+# Initialize session state
+if 'metrics_history' not in st.session_state:
+    st.session_state.metrics_history = pd.DataFrame(columns=[
+        'timestamp', 'cpu_usage', 'memory_used', 'disk_used',
+        'cpu_power', 'mem_power', 'disk_power', 'total_power', 'co2_hourly'
+    ])
 
-if __name__ == "__main__":
-    SystemMonitor.display_dashboard()
+# Dashboard UI
+st.title("🌐 Data Center Energy Intelligence Dashboard")
+st.markdown("""
+**Addressing cloud infrastructure challenges:**  
+Real-time power visibility • Anomaly detection • Carbon-aware scheduling
+""")
+
+# Main columns
+col1, col2 = st.columns([2, 3])
+
+with col1:
+    st.subheader("Live Power Metrics")
+    placeholder = st.empty()
+    
+    # Anomaly detection section
+    st.subheader("🚨 Energy Anomaly Detection")
+    if len(st.session_state.metrics_history) > 10:
+        avg_power = st.session_state.metrics_history['total_power'].mean()
+        last_power = st.session_state.metrics_history['total_power'].iloc[-1]
+        anomaly_threshold = avg_power * 1.3  # 30% above average
+        
+        if last_power > anomaly_threshold:
+            st.error(f"⚠️ Power spike detected: {last_power:.1f}W (30% above normal)")
+            st.progress(min(100, int((last_power/avg_power)*100)))
+        else:
+            st.success("✔️ Normal operation")
+    else:
+        st.info("Collecting baseline data...")
+
+with col2:
+    st.subheader("Power Trend Analysis")
+    if not st.session_state.metrics_history.empty:
+        fig = px.line(st.session_state.metrics_history, 
+                     x='timestamp', y='total_power',
+                     title="Total Power Consumption (W)")
+        st.plotly_chart(fig, use_container_width=True)
+
+# Continuous monitoring
+monitor = DataCenterMonitor()
+
+while True:
+    # Get fresh metrics
+    metrics = monitor.get_live_metrics()
+    power = monitor.estimate_power(metrics)
+    emissions = monitor.calculate_emissions(power["total_power"])
+    
+    # Update metrics history
+    new_row = {
+        **metrics,
+        "cpu_power": power["cpu_power"],
+        "mem_power": power["mem_power"],
+        "disk_power": power["disk_power"],
+        "total_power": power["total_power"],
+        "co2_hourly": emissions["hourly"]
+    }
+    st.session_state.metrics_history = pd.concat([
+        st.session_state.metrics_history,
+        pd.DataFrame([new_row])
+    ], ignore_index=True).tail(60)  # Keep last 60 readings
+    
+    # Update live metrics display
+    with placeholder.container():
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        
+        kpi1.metric("CPU Power", f"{power['cpu_power']:.1f}W", 
+                   f"{metrics['cpu_usage']:.1f}% usage")
+        kpi2.metric("Memory Power", f"{power['mem_power']:.1f}W", 
+                   f"{metrics['memory_used']:.1f}/{metrics['memory_total']:.1f}GB")
+        kpi3.metric("Total Power", f"{power['total_power']:.1f}W", 
+                   f"PUE: {PUE_CLOUD:.2f}")
+        kpi4.metric("CO₂ Emissions", f"{emissions['hourly']:.1f}g/h", 
+                   f"{emissions['annual']/1000:.1f} kg/year")
+    
+    time.sleep(5)  # Refresh every 5 seconds
