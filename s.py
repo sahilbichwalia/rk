@@ -5,45 +5,17 @@ import psutil
 import platform
 import socket
 import os
-import getpass
-import datetime
-import uuid
+from datetime import datetime
 from typing import Dict, Any
 
 # Constants
 GRID_EMISSION_FACTOR = 400  # gCO2/kWh (US average)
-WATER_USAGE_IMPACT = 0.001
-
-# Environment Detection
-def detect_environment() -> Dict[str, Any]:
-    """Detect if running in Streamlit Cloud or local/server"""
-    env_info = {
-        "is_streamlit_cloud": "STREAMLIT_SERVER_ADDRESS" in os.environ,
-        "is_cloud": True if "STREAMLIT_SERVER_ADDRESS" in os.environ else None,
-        "platform": platform.system(),
-        "containerized": os.path.exists("/.dockerenv"),
-        "cloud_provider": None
-    }
-
-    # Detect cloud providers
-    try:
-        if os.path.exists("/proc/1/cgroup") and any("docker" in line for line in open("/proc/1/cgroup")):
-            env_info["containerized"] = True
-            if os.path.exists("/etc/aws-hostname"):
-                env_info["cloud_provider"] = "AWS"
-            elif os.path.exists("/etc/gce-hostname"):
-                env_info["cloud_provider"] = "GCP"
-            elif "AZURE" in socket.gethostname():
-                env_info["cloud_provider"] = "Azure"
-    except:
-        pass
-
-    return env_info
+PUE_CLOUD = 1.2  # Power Usage Effectiveness for cloud data centers
 
 # Page configuration
 st.set_page_config(
-    page_title="System Monitoring Dashboard",
-    page_icon="🖥️",
+    page_title="Cloud/Server Energy Monitor",
+    page_icon="🌐",
     layout="wide"
 )
 
@@ -56,60 +28,105 @@ st.markdown("""
         padding: 15px;
         margin: 10px 0;
     }
-    .gpu-card {
+    .alert-card {
+        background-color: #2a3f5f;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    .power-card {
         background-color: #1a1d24;
         border-radius: 10px;
         padding: 15px;
         margin: 10px 0;
     }
-    .cloud-banner {
-        background-color: #2a3f5f;
-        color: white;
-        padding: 10px;
-        border-radius: 5px;
-        margin-bottom: 20px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-def get_system_info() -> Dict[str, Any]:
-    """Get system information with cloud awareness"""
-    env = detect_environment()
-    info = {
-        "Environment": "Streamlit Cloud" if env["is_streamlit_cloud"] else 
-                     f"{env['cloud_provider']} Cloud" if env["cloud_provider"] else "Local Server",
-        "OS": platform.system(),
-        "OS Version": platform.version(),
-        "Platform": platform.platform(),
-        "Containerized": env["containerized"],
-        "Hostname": socket.gethostname(),
-        "CPU Cores (Physical/Logical)": f"{psutil.cpu_count(logical=False)}/{psutil.cpu_count(logical=True)}",
-        "RAM Size (GB)": round(psutil.virtual_memory().total / (1024 ** 3), 2),
-    }
+class SystemMonitor:
+    """Comprehensive system monitoring with energy analytics"""
     
-    # Only include sensitive info if not in cloud
-    if not env["is_streamlit_cloud"]:
-        info.update({
-            "User Name": getpass.getuser(),
-            "MAC Address": ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) 
-                          for elements in range(0, 2*6, 8)][::-1])
-        })
-    return info
-
-def get_cloud_metrics() -> Dict[str, Any]:
-    """Get metrics that work well in cloud environments"""
-    return {
-        "CPU Usage (%)": psutil.cpu_percent(interval=1),
-        "Memory Usage (%)": psutil.virtual_memory().percent,
-        "Disk Usage (%)": psutil.disk_usage("/").percent,
-        "Network IO (MB)": {
-            "Sent": round(psutil.net_io_counters().bytes_sent / (1024 ** 2), 2),
-            "Received": round(psutil.net_io_counters().bytes_recv / (1024 ** 2), 2)
+    @staticmethod
+    def detect_environment() -> Dict[str, Any]:
+        """Detect if running in cloud environment"""
+        return {
+            "is_streamlit_cloud": "STREAMLIT_SERVER_ADDRESS" in os.environ,
+            "platform": platform.system(),
+            "containerized": os.path.exists("/.dockerenv")
         }
-    }
 
-def create_gauge(value: float, title: str, color: str):
-    """Create a gauge chart"""
+    @staticmethod
+    def get_system_metrics() -> Dict[str, Any]:
+        """Get all system metrics in a cloud-friendly way"""
+        try:
+            cpu_freq = psutil.cpu_freq().current if hasattr(psutil, "cpu_freq") else None
+            mem = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            net_io = psutil.net_io_counters()
+            
+            return {
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "cpu_usage": psutil.cpu_percent(interval=1),
+                "cpu_freq": cpu_freq,
+                "memory_used": mem.used / (1024 ** 3),
+                "memory_total": mem.total / (1024 ** 3),
+                "memory_percent": mem.percent,
+                "disk_used": disk.used / (1024 ** 3),
+                "disk_total": disk.total / (1024 ** 3),
+                "disk_percent": disk.percent,
+                "network_sent": net_io.bytes_sent / (1024 ** 2),
+                "network_recv": net_io.bytes_recv / (1024 ** 2)
+            }
+        except Exception as e:
+            st.error(f"Metrics collection error: {str(e)}")
+            return None
+
+    @staticmethod
+    def calculate_power(metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate power usage from metrics"""
+        if not metrics:
+            return None
+            
+        try:
+            # Dynamic power estimation
+            cpu_power = (metrics["cpu_usage"]/100) * (metrics["cpu_freq"]/1000 if metrics["cpu_freq"] else 2.5) * 15
+            mem_power = metrics["memory_used"] * 0.3  # 0.3W per GB
+            disk_power = 5 if metrics["disk_percent"] > 50 else 2
+            
+            total_it_power = cpu_power + mem_power + disk_power
+            total_power = total_it_power * PUE_CLOUD
+            
+            return {
+                "cpu": round(cpu_power, 1),
+                "memory": round(mem_power, 1),
+                "disk": round(disk_power, 1),
+                "total_it": round(total_it_power, 1),
+                "total_facility": round(total_power, 1),
+                "pue": PUE_CLOUD
+            }
+        except Exception as e:
+            st.error(f"Power calculation error: {str(e)}")
+            return None
+
+    @staticmethod
+    def calculate_emissions(power_w: float) -> Dict[str, Any]:
+        """Calculate carbon emissions"""
+        if not power_w:
+            return None
+            
+        try:
+            hourly_co2 = (power_w / 1000) * GRID_EMISSION_FACTOR
+            return {
+                "hourly": round(hourly_co2, 1),
+                "daily": round(hourly_co2 * 24 / 1000, 2),
+                "annual": round(hourly_co2 * 24 * 365 / 1000000, 3)
+            }
+        except Exception as e:
+            st.error(f"Emission calculation error: {str(e)}")
+            return None
+
+def create_gauge(value: float, title: str, color: str) -> px.pie:
+    """Create a gauge chart for metrics visualization"""
     fig = px.pie(
         values=[value, 100-value],
         names=['Used', 'Free'],
@@ -118,7 +135,7 @@ def create_gauge(value: float, title: str, color: str):
     )
     fig.update_traces(
         textinfo='none',
-        marker=dict(colors=[color, '#d3d3d3'])
+        marker=dict(colors=[color, '#333333'])
     )
     fig.update_layout(
         showlegend=False,
@@ -128,71 +145,150 @@ def create_gauge(value: float, title: str, color: str):
     return fig
 
 def main():
-    env = detect_environment()
+    """Main application function"""
+    monitor = SystemMonitor()
+    env = monitor.detect_environment()
     
-    # Environment banner
+    st.title("🌐 Cloud/Server Energy Monitoring Dashboard")
+    
+    # Environment awareness
     if env["is_streamlit_cloud"]:
         st.markdown("""
-        <div class="cloud-banner">
-            <h3>🛠️ Running in Streamlit Cloud Environment</h3>
+        <div class="alert-card">
+            <h3>🛠️ Running in Cloud Environment</h3>
             <p>Some hardware metrics may be limited due to cloud virtualization</p>
         </div>
         """, unsafe_allow_html=True)
     
-    st.title("🖥️ Cloud/Server Monitoring Dashboard")
+    # Initialize session state for metrics history
+    if 'metrics_history' not in st.session_state:
+        st.session_state.metrics_history = pd.DataFrame(columns=[
+            'timestamp', 'cpu_usage', 'memory_percent', 'disk_percent',
+            'cpu_power', 'mem_power', 'disk_power', 'total_power'
+        ])
     
-    # Get data
-    system_info = get_system_info()
-    metrics = get_cloud_metrics()
+    # Get current metrics
+    metrics = monitor.get_system_metrics()
     
-    # Layout
-    col1, col2, col3 = st.columns(3)
+    # Layout columns
+    col1, col2 = st.columns([1, 2])
     
     with col1:
-        st.markdown("### Environment Info")
-        env_df = pd.DataFrame({
-            "Property": list(system_info.keys()),
-            "Value": list(system_info.values())
-        })
-        st.dataframe(env_df, hide_index=True, use_container_width=True)
+        st.markdown("### System Metrics")
         
+        if metrics:
+            # Resource usage gauges
+            st.plotly_chart(
+                create_gauge(metrics["cpu_usage"], "CPU", "#1f77b4"),
+                use_container_width=True
+            )
+            
+            st.plotly_chart(
+                create_gauge(metrics["memory_percent"], "Memory", "#ff7f0e"),
+                use_container_width=True
+            )
+            
+            st.plotly_chart(
+                create_gauge(metrics["disk_percent"], "Disk", "#2ca02c"),
+                use_container_width=True
+            )
+            
+            # Network activity
+            st.markdown("#### Network Activity")
+            net_df = pd.DataFrame({
+                "Direction": ["Sent", "Received"],
+                "MB": [metrics["network_sent"], metrics["network_recv"]]
+            })
+            st.bar_chart(net_df.set_index("Direction"))
+    
     with col2:
-        st.markdown("### CPU Usage")
-        st.plotly_chart(
-            create_gauge(metrics["CPU Usage (%)"], "CPU", "#1f77b4"),
-            use_container_width=True
-        )
+        st.markdown("### Power Analytics")
         
-        st.markdown("### Memory Usage")
-        st.plotly_chart(
-            create_gauge(metrics["Memory Usage (%)"], "Memory", "#ff7f0e"),
-            use_container_width=True
-        )
-        
-    with col3:
-        st.markdown("### Disk Usage")
-        st.plotly_chart(
-            create_gauge(metrics["Disk Usage (%)"], "Disk", "#2ca02c"),
-            use_container_width=True
-        )
-        
-        st.markdown("### Network Activity")
-        net_df = pd.DataFrame({
-            "Direction": ["Sent", "Received"],
-            "MB": [
-                metrics["Network IO (MB)"]["Sent"],
-                metrics["Network IO (MB)"]["Received"]
-            ]
-        })
-        st.bar_chart(net_df.set_index("Direction"))
+        if metrics:
+            power = monitor.calculate_power(metrics)
+            emissions = monitor.calculate_emissions(power["total_facility"] if power else None)
+            
+            if power:
+                # Update metrics history
+                new_row = {
+                    'timestamp': metrics["timestamp"],
+                    'cpu_usage': metrics["cpu_usage"],
+                    'memory_percent': metrics["memory_percent"],
+                    'disk_percent': metrics["disk_percent"],
+                    'cpu_power': power["cpu"],
+                    'mem_power': power["memory"],
+                    'disk_power': power["disk"],
+                    'total_power': power["total_facility"]
+                }
+                
+                st.session_state.metrics_history = pd.concat([
+                    st.session_state.metrics_history,
+                    pd.DataFrame([new_row])
+                ]).tail(60)  # Keep last 60 readings
+                
+                # Power metrics cards
+                st.markdown("""
+                <div class="power-card">
+                    <h4>Power Consumption</h4>
+                    <p>CPU: {cpu}W | Memory: {mem}W | Disk: {disk}W</p>
+                    <p>Total IT Load: {it}W | Facility Power: {fac}W (PUE: {pue})</p>
+                </div>
+                """.format(
+                    cpu=power["cpu"],
+                    mem=power["memory"],
+                    disk=power["disk"],
+                    it=power["total_it"],
+                    fac=power["total_facility"],
+                    pue=power["pue"]
+                ), unsafe_allow_html=True)
+                
+                # Emissions card
+                if emissions:
+                    st.markdown("""
+                    <div class="power-card">
+                        <h4>Carbon Emissions</h4>
+                        <p>Current: {hourly}g CO₂/hour</p>
+                        <p>Estimated Daily: {daily}kg | Annual: {annual} metric tons</p>
+                    </div>
+                    """.format(
+                        hourly=emissions["hourly"],
+                        daily=emissions["daily"],
+                        annual=emissions["annual"]
+                    ), unsafe_allow_html=True)
+                
+                # Anomaly detection
+                if len(st.session_state.metrics_history) > 10:
+                    avg_power = st.session_state.metrics_history['total_power'].mean()
+                    current_power = power["total_facility"]
+                    threshold = avg_power * 1.3  # 30% above average
+                    
+                    if current_power > threshold:
+                        st.markdown("""
+                        <div class="alert-card">
+                            <h4>⚠️ Power Anomaly Detected</h4>
+                            <p>Current: {current:.1f}W (Avg: {avg:.1f}W)</p>
+                            <p>Potential inefficiency or workload spike detected</p>
+                        </div>
+                        """.format(current=current_power, avg=avg_power), unsafe_allow_html=True)
+                
+                # Power trend visualization
+                if len(st.session_state.metrics_history) > 1:
+                    st.markdown("#### Power Trend (Last 60 Readings)")
+                    fig = px.line(
+                        st.session_state.metrics_history,
+                        x='timestamp',
+                        y='total_power',
+                        labels={'total_power': 'Total Power (W)'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
     
     # Cloud-specific notes
     if env["is_streamlit_cloud"]:
         st.info("""
-        **Note about Streamlit Cloud:**
-        - Hardware-specific metrics (GPU, exact CPU details) are not available
-        - Disk and memory measurements show container limits, not physical hardware
-        - Network metrics are container-local
+        **Cloud Environment Notes:**
+        - Power estimations are approximations based on container resource usage
+        - Actual physical hardware metrics may differ
+        - Anomaly detection compares against recent container activity patterns
         """)
 
 if __name__ == "__main__":
