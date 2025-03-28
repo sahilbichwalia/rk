@@ -1,8 +1,14 @@
-psutil
-GPUtil
+# Core requirements
+streamlit>=1.22.0
+plotly>=5.13.0
+pandas>=1.5.0
+psutil>=5.9.0
 
-setuptools  # Required for distutils in Python 3.12+
-streamlit
-plotly
-pandas
+# GPU monitoring (optional)
+gputil>=1.4.0
 
+# Environment detection
+python-dotenv>=0.21.0
+
+# For JSON output formatting
+pygments>=2.13.0
