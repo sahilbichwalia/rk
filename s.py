@@ -1,10 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from your_monitoring_script import (get_system_info, get_cpu_usage, 
-                                  get_memory_usage, get_disk_usage,
-                                  get_network_info, get_gpu_info,
-                                  get_system_boot_time, calculate_energy_metrics)
+
 
 # Page configuration
 st.set_page_config(
