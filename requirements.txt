@@ -2,4 +2,7 @@ psutil
 GPUtil
 
 setuptools  # Required for distutils in Python 3.12+
+streamlit
+plotly
+pandas
 
